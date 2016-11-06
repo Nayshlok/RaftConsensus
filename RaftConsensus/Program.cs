@@ -17,24 +17,27 @@ namespace RaftConsensus
 
         public static void Main(string[] args)
         {
-            ServerLogic server = new ServerLogic();
-            Thread.Sleep(1000);
-            var vote = new VoteRequest
+            var ipAddresses = new List<ServerInfo>();
+            for(int i = 0; i < 5; i++)
             {
-                CandidateId = 1,
-                LastLogIndex = 2,
-                LastLogTerm = 2,
-                Term = 3
-            };
-            BinaryFormatter formatter = new BinaryFormatter();
-            IPEndPoint endpoint = new IPEndPoint(IPAddress.Loopback, 13000);
-            TcpClient client = new TcpClient();
-            client.Connect(endpoint);
-            formatter.Serialize(client.GetStream(), vote);
-            var obj = formatter.Deserialize(client.GetStream());
-            var voteResponse = obj as VoteResponse;
-            //ClientLogic client = new ClientLogic();
-            //client.Run();
+                ipAddresses.Add(new ServerInfo
+                {
+                    Id = i,
+                    ServerAddress = new IPEndPoint(IPAddress.Loopback, 13000 + i)
+                });
+            }
+            for(int i = 0; i < ipAddresses.Count; i++)
+            {
+                ServerState state = new ServerState
+                {
+                    Id = i,
+                    ServerInfo = ipAddresses.Where(x => x.Id != i).ToList(),
+                    CurrentState = CurrentState.Follower,
+                    ThisServerInfo = ipAddresses[i]
+                };
+                ServerLogic server = new ServerLogic(state);
+                server.Start();
+            }
         }
     }
 }

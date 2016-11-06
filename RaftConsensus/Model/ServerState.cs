@@ -9,6 +9,8 @@ namespace RaftConsensus.Model
         public int CurrentTerm { get; set; }
         public int? VotedForId { get; set; }
         public List<LogItem> Log { get; set; } = new List<LogItem>();
+        public ServerInfo ThisServerInfo { get; set;}
+        public int LeaderId { get; set; }
 
         //Volatile state
         public int CommittedIndex { get; set; }
