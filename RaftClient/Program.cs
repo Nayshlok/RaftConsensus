@@ -15,12 +15,10 @@ namespace RaftClient
     {
         public static void Main(string[] args)
         {
-            Console.WriteLine("Enter the server to send the request to");
-            var serverId = int.Parse(Console.ReadLine());
             var serverInfo = new ServerInfo
             {
-                Id = serverId,
-                ServerAddress = new IPEndPoint(IPAddress.Loopback, 13000 + serverId)
+                Id = 0,
+                ServerAddress = new IPEndPoint(IPAddress.Loopback, 13000)
             };
             var info = serverInfo;
             TcpClient client = new TcpClient();
@@ -31,12 +29,19 @@ namespace RaftClient
                 VariableName = "x",
                 VariableValue = 2
             };
+            Console.Read();
             formatter.Serialize(client.GetStream(), clientRequest);
             var obj = formatter.Deserialize(client.GetStream());
             var response = obj as ClientResponse;
             if (response != null)
             {
-
+                if (!response.Success)
+                {
+                    Console.WriteLine($"Connection failed. Sending to {response.Leader.ServerAddress}, id {response.Leader.Id}");
+                    client.Close();
+                    client.Connect(response.Leader.ServerAddress);
+                    formatter.Serialize(client.GetStream(), clientRequest);
+                }
             }
             Console.WriteLine("Press any key to close");
             Console.ReadLine();
