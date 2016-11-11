@@ -15,36 +15,42 @@ namespace RaftClient
     {
         public static void Main(string[] args)
         {
-            var serverInfo = new ServerInfo
+            var info = new ServerInfo
             {
                 Id = 0,
                 ServerAddress = new IPEndPoint(IPAddress.Loopback, 13000)
             };
-            var info = serverInfo;
-            TcpClient client = new TcpClient();
-            client.Connect(info.ServerAddress);
             BinaryFormatter formatter = new BinaryFormatter();
             var clientRequest = new ClientRequest
             {
                 VariableName = "x",
                 VariableValue = 2
             };
-            Console.Read();
-            formatter.Serialize(client.GetStream(), clientRequest);
-            var obj = formatter.Deserialize(client.GetStream());
-            var response = obj as ClientResponse;
-            if (response != null)
-            {
-                if (!response.Success)
-                {
-                    Console.WriteLine($"Connection failed. Sending to {response.Leader.ServerAddress}, id {response.Leader.Id}");
-                    client.Close();
-                    client.Connect(response.Leader.ServerAddress);
-                    formatter.Serialize(client.GetStream(), clientRequest);
-                }
-            }
-            Console.WriteLine("Press any key to close");
             Console.ReadLine();
+            while (true)
+            {
+                TcpClient client = new TcpClient();
+                client.Connect(info.ServerAddress);
+                formatter.Serialize(client.GetStream(), clientRequest);
+                var obj = formatter.Deserialize(client.GetStream());
+                var response = obj as ClientResponse;
+                if (response != null)
+                {
+                    if (!response.Success)
+                    {
+                        Console.WriteLine($"Connection failed. Sending to {response.Leader.ServerAddress}, id {response.Leader.Id}");
+                        client.Close();
+                        client = new TcpClient();
+                        client.Connect(response.Leader.ServerAddress);
+                        formatter.Serialize(client.GetStream(), clientRequest);
+                    }
+                }
+                clientRequest.VariableValue++;
+                Console.WriteLine("Press any key to close");
+                Console.ReadLine();
+                client.Close();
+
+            }
         }
     }
 }

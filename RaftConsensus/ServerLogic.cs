@@ -17,14 +17,17 @@ namespace RaftConsensus
         private int _votesReceived;
         private Timer _heartBeat;
         private Timer _election;
+        private Timer _followerTimer;
         private TcpListener listener;
         private List<CandidateLogItem> _candidateEntries = new List<CandidateLogItem>();
         private int ElectionTimeout { get { return _rand.Next(5000, 10000); } }
+        private bool firstItem = true;
 
         public ServerLogic(ServerState state = null)
         {
             _election = new Timer(ChangeToCandidate);
             _heartBeat = new Timer(StartHeartbeat);
+            _followerTimer = new Timer(ChangeToFollower);
             _state = state ?? new ServerState();
             _listeningThread = new Thread(ServerStart);
             _listeningThread.Name = "ServerThread" + state.Id;
@@ -68,7 +71,15 @@ namespace RaftConsensus
                     }
                     if (response != null)
                     {
-                        formatter.Serialize(socket.GetStream(), response);
+                        try
+                        {
+                            formatter.Serialize(socket.GetStream(), response);
+                        }
+                        catch(Exception ex)
+                        {
+                            Console.Error.WriteLine(ex.Message);
+                            Console.Error.WriteLine(ex.StackTrace);
+                        }
                     }
                 }
             }
@@ -88,10 +99,10 @@ namespace RaftConsensus
                     _election.Change(timeout, Timeout.Infinite);
                     break;
                 case CurrentState.Candidate:
-                    var followerTimer = new Timer(ChangeToFollower);
-                    followerTimer.Change(4000, Timeout.Infinite);
+                    _followerTimer.Change(4000, Timeout.Infinite);
                     _state.CurrentTerm++;
                     _votesReceived = 0;
+                    _state.VotedForId = _state.Id;
                     _votesReceived++;
                     foreach(var info in _state.ServerInfo)
                     {
@@ -101,6 +112,7 @@ namespace RaftConsensus
                     break;
                 case CurrentState.Leader:
                     Console.WriteLine($"Server {_state.Id} is now sending heartbeat.");
+                    _followerTimer.Change(Timeout.Infinite, Timeout.Infinite);
                     _heartBeat.Change(0, 500);
                     break;
             }
@@ -153,6 +165,7 @@ namespace RaftConsensus
 
         public AppendEntriesResponse SendAppend(ServerInfo serverInfo, AppendEntriesRequest appendRequest)
         {
+            _election.Change(Timeout.Infinite, Timeout.Infinite);
             TcpClient client = new TcpClient();
             client.Connect(serverInfo.ServerAddress);
             BinaryFormatter formatter = new BinaryFormatter();
@@ -163,7 +176,10 @@ namespace RaftConsensus
                 var appendResponse = (AppendEntriesResponse)response;
                 if (appendResponse.Term > _state.CurrentTerm)
                 {
+                    Console.WriteLine($"Server {_state.Id} is reverting to follower from {_state.CurrentState}");
+                    _state.CurrentTerm = appendResponse.Term;
                     _state.CurrentState = CurrentState.Follower;
+                    _heartBeat.Change(Timeout.Infinite, Timeout.Infinite);
                     Run();
                 }
                 return appendResponse;
@@ -195,8 +211,10 @@ namespace RaftConsensus
                     var voteResponse = (VoteResponse)response;
                     if(voteResponse.Term > _state.CurrentTerm && _state.CurrentState == CurrentState.Candidate)
                     {
+                        Console.WriteLine($"Server {_state.Id} reverting to follower from {_state.CurrentState}");
                         _state.CurrentTerm = voteResponse.Term;
                         _state.CurrentState = CurrentState.Follower;
+                        _state.VotedForId = null;
                         _votesReceived = 0;
                         Run();
                         return;
@@ -216,7 +234,7 @@ namespace RaftConsensus
 
         public VoteResponse GetVote(VoteRequest request)
         {
-            var validTerm = _state.CurrentTerm >= request.Term;
+            var validTerm = _state.CurrentTerm <= request.Term;
             var ableToVote = _state.VotedForId == null || _state.VotedForId == request.CandidateId;
             var logIsValid = ((_state.Log.LastOrDefault()?.Term ?? 0) == request.LastLogTerm)
                 && _state.CommittedIndex == request.LastLogIndex;
@@ -238,28 +256,32 @@ namespace RaftConsensus
 
         public AppendEntriesResponse AppendEntry(AppendEntriesRequest request)
         {
-            Console.WriteLine($"Server {_state.Id} received a heartbeat");
+            //Console.WriteLine($"Server {_state.Id} received a heartbeat");
             _election.Change(ElectionTimeout, Timeout.Infinite);
             var termIsValid = _state.CurrentTerm >= request.Term;
-            var entryMatches = false;
             var logIsLongEnough = _state.Log.Count > request.PrevLogIndex;
+            var entryMatches = false;
             if (logIsLongEnough)
             {
                 entryMatches = _state.Log[request.PrevLogIndex].Term == request.PrevLogTerm;
             }
-            if (request.Term > _state.CurrentTerm)
+            else
             {
+                entryMatches = _state.Log.Count == 0 && request.PrevLogIndex == 0;
+            }
+            if (request.Term > _state.CurrentTerm || (_state.CurrentState == CurrentState.Candidate && _state.CurrentTerm <= request.Term))
+            {
+                Console.WriteLine($"Server {_state.Id} is reverting to follower from {_state.CurrentState}");
                 _state.CurrentTerm = request.Term;
                 _state.CurrentState = CurrentState.Follower;
             }
             if (termIsValid && entryMatches)
             {
                 _state.VotedForId = null;
-                _state.VotedForId = null;
                 _state.LeaderId = request.Leader.Id;
-                if (logIsLongEnough)
+                if (_state.Log.Count > request.PrevLogIndex + 1)
                 {
-                    _state.Log.RemoveRange(request.PrevLogIndex, _state.Log.Count - request.PrevLogIndex);
+                    _state.Log.RemoveRange(request.PrevLogIndex + 1, _state.Log.Count - request.PrevLogIndex);
                 }
                 if (request.entries != null)
                 {
@@ -301,7 +323,10 @@ namespace RaftConsensus
                 Value = request.VariableValue,
                 Term = _state.CurrentTerm
             };
-            _state.LastAppliedIndex++;
+            if (!firstItem)
+            {
+                _state.LastAppliedIndex++;
+            }
             _state.Log.Add(logItem);
             var clientResponse = new ClientResponse();
             var serverCopyCount = 0;
@@ -323,7 +348,11 @@ namespace RaftConsensus
             }
             if (serverCopyCount > 3)
             {
-                _state.CommittedIndex++;
+                if (!firstItem)
+                {
+                    _state.CommittedIndex++;
+                }
+                firstItem = false;
                 clientResponse.Success = true;
             }
             foreach(var info in _state.ServerInfo)
